@@ -19,14 +19,16 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
     page=browser.contexts()[0].pages()[0];await page.waitForFunction(()=>window.relay&&document.querySelector('#stat-segments').textContent.includes('6'));
     await page.getByRole('button',{name:'New download'}).click();
     await page.locator('#add-form [name=url]').fill('https://example.com/portable-test.zip');
+    const destination=path.join(profile,'chosen downloads');await page.locator('#add-form [name=destination]').fill(destination);
     await page.locator('#add-form [name=paused]').check();
     await page.getByRole('button',{name:'Start download'}).click();
     await page.getByRole('button',{name:'Resume portable-test.zip',exact:true}).waitFor();
-    const state=await page.evaluate(()=>window.relay.state());assert.equal(state.jobs[0].status,'paused');
+    const state=await page.evaluate(()=>window.relay.state());assert.equal(state.jobs[0].status,'paused');assert.equal(state.jobs[0].destination,destination);
     assert.ok(fs.existsSync(path.join(state.extensionDir,'chromium','manifest.json')));
     assert.ok(fs.existsSync(path.join(state.extensionDir,'firefox','manifest.json')));
     await page.getByRole('button',{name:'Remove portable-test.zip',exact:true}).click();
-    await page.waitForFunction(async()=>!(await window.relay.state()).jobs.length);
+    for(let i=0;i<100&&(await page.evaluate(()=>window.relay.state())).jobs.length;i++)await wait(50);
+    assert.equal((await page.evaluate(()=>window.relay.state())).jobs.length,0);
     await page.close();page=null;
     console.log('Portable executable passed: launch, renderer, IPC, queue, bundled browser extensions, clean exit.');
   }finally{

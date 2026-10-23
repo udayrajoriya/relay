@@ -1,7 +1,8 @@
 const http = require('node:http');
 const { timingSafeEqual } = require('node:crypto');
+const {validURL}=require('./engine');
 
-function startBridge(engine, token, port=17864) {
+function startBridge(engine, token, port=17864, {selectDestination}={}) {
   const server=http.createServer(async(req,res)=>{
     res.setHeader('Content-Type','application/json');
     res.setHeader('Cache-Control','no-store');
@@ -14,7 +15,12 @@ function startBridge(engine, token, port=17864) {
     try {
       for await(const chunk of req) {body+=chunk;if(body.length>16384){send(413,{error:'Request too large.'});req.destroy();return;}}
       const input=JSON.parse(body);
-      const id=engine.add({url:input.url,name:input.name,queue:'Browser'});
+      const url=validURL(input.url);
+      const destination=selectDestination?await selectDestination(()=>!res.destroyed):undefined;
+      // A browser timeout or a canceled folder dialog must not leave a stray download.
+      if(res.destroyed)return;
+      if(destination===null)return send(409,{error:'Download canceled in Relay. The browser download was kept.'});
+      const id=engine.add({url,name:input.name,queue:'Browser',destination});
       send(201,{id});
     } catch(e) {send(400,{error:e.message});}
   });

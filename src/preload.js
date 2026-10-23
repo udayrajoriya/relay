@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('relay',{
   action:(id,action)=>ipcRenderer.invoke('action',id,action),
   settings:input=>ipcRenderer.invoke('settings',input),
   chooseFolder:()=>ipcRenderer.invoke('choose-folder'),
+  chooseDownloadFolder:current=>ipcRenderer.invoke('choose-download-folder',current),
   showFile:id=>ipcRenderer.invoke('show-file',id),
   openFolder:()=>ipcRenderer.invoke('open-folder'),
   copyToken:()=>ipcRenderer.invoke('copy-token'),

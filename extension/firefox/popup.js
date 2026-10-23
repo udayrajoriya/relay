@@ -3,12 +3,14 @@ const $=s=>document.querySelector(s);
 const endpoint='http://127.0.0.1:17864';
 function status(text){$('#status').textContent=text;}
 async function remote(route,body){
+  if(body){const reply=await api.runtime.sendMessage({type:'relay-download',...body});if(!reply?.ok)throw new Error(reply?.error||'Download handoff failed.');return reply;}
   const {token}=await api.storage.local.get('token');
-  const res=await fetch(endpoint+route,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${token||''}`,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(5000)});
+  const res=await fetch(endpoint+route,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${token||''}`,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(body?120000:5000)});
   const data=await res.json();if(!res.ok)throw new Error(data.error);return data;
 }
 async function send(url,button){
   button.disabled=true;
+  status('Choose a download folder in the Relay desktop app.');
   try{if(!/^https?:\/\//i.test(url))throw new Error('Paste a direct HTTP(S) URL.');await remote('/downloads',{url});status('Added to your Relay download queue.');button.textContent='✓ Sent';}
   catch(e){status(e.message.includes('fetch')?'Could not connect. Open Relay and check the pairing token.':e.message);}
   finally{button.disabled=false;}

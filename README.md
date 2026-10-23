@@ -6,7 +6,9 @@ A Windows desktop download manager built with Electron and a local Node.js trans
 
 Open `dist/Relay-0.1.0-Windows.exe`. This is a portable, unsigned x64 build; no Node.js installation is needed to run it. Windows may show its standard unsigned-app prompt. An unpacked executable is also available at `dist/win-unpacked/Relay.exe`.
 
-Choose **New download**, paste a direct HTTP(S) URL, and start. Files initially go to your Windows Downloads folder under `Relay`, sorted into category folders. Change the destination in **Settings & integration**. Closing the app saves and pauses running downloads. Open it again and choose **Resume all** to continue.
+Choose **New download**, paste a direct HTTP(S) URL, and choose a **Download directory** using the path field or **Browse** button before starting. The field starts with the default from **Settings & integration**; choosing another folder applies only to that download. Completed files are sorted into category subfolders when organization is enabled. Closing the app saves and pauses running downloads. Open it again and choose **Resume all** to continue.
+
+Partial download data stays in `<chosen directory>/.relay-parts/<download ID>/`, and final assembly also happens on the destination drive. Partial files are removed after completion or when the download is removed. Existing partial downloads from the previous version are copied from the app profile into their saved destination on the next resume; the originals are kept until migration succeeds. If the destination is unavailable, the download shows an error and the original bytes remain available for retry.
 
 ## Included
 
@@ -25,7 +27,7 @@ Choose **New download**, paste a direct HTTP(S) URL, and start. Files initially 
 2. **Chrome:** open `chrome://extensions`, enable **Developer mode**, select **Load unpacked**, and choose the `chromium` folder. **Edge:** follow the same steps at `edge://extensions`.
 3. **Firefox:** open `about:debugging`, choose **This Firefox → Load Temporary Add-on**, and select `firefox/manifest.json`. This development installation lasts until Firefox restarts. Signed distribution is not included. Grant requested site permissions if Firefox asks; media detection needs permission on the current site.
 4. In Relay settings, click **Copy pairing token**. Open the browser companion popup, paste the token, and click **Connect**.
-5. Right-click a link or media element and choose **Download with Relay**, paste a URL into the popup, or turn on automatic capture. Play media on a page and open the popup to view detected direct media files.
+5. Right-click a link or media element and choose **Download with Relay**, paste a URL into the popup, or turn on automatic capture. Relay asks for a destination folder before accepting each browser download. Canceling this picker leaves the browser's original download running. Play media on a page and open the popup to view detected direct media files.
 
 The bridge binds only to `127.0.0.1:17864`. Requests require a private 256-bit pairing token stored in your app profile. Keep it private. The extension asks for HTTP(S) host access to detect media across sites; it stores up to 30 detected URLs per tab locally and clears them on navigation or tab close. URLs are only sent to your local Relay app, which contacts the file's origin to download it. The app has no analytics or external backend.
 
@@ -58,7 +60,7 @@ node test/extension-smoke.cjs
 
 Set `CHROMIUM_EXECUTABLE` to an existing Chromium-for-Testing executable if it is not in Playwright's default browser directory. The desktop test launches Electron against an isolated profile and exercises the UI, verifies the resulting file hash, and checks renderer isolation. The extension test loads the actual Chromium extension and verifies pairing, direct URL handoff, media detection, and automatic download capture. Chrome/Edge share the tested Chromium implementation. Firefox's manifest and companion sources are included; Firefox installation and operation have not been verified end to end.
 
-Download history, partial segments, and the pairing token live in `%APPDATA%/relay-download-manager/`. Preserve that folder if you need to migrate or recover downloads. Resume can only reuse bytes while the original URL remains valid and the server provides a matching validator. Normal process interruption is tested; no application can guarantee recovery from physical disk corruption. On NTFS, assembled files are flushed and published atomically through a hard link; filesystems without hard-link support use an exclusive-copy fallback.
+Download history and the pairing token live in `%APPDATA%/relay-download-manager/`; download bytes live in each chosen directory's `.relay-parts` subfolder. Preserve both the app profile and those subfolders to migrate or recover downloads. Resume can only reuse bytes while the original URL remains valid and the server provides a matching validator. Normal process interruption is tested; no application can guarantee recovery from physical disk corruption. On NTFS, assembled files are flushed and published atomically through a hard link; filesystems without hard-link support use an exclusive-copy fallback.
 
 ## Design references
 

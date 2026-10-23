@@ -9,7 +9,7 @@ const {startBridge}=require('../src/bridge');
 (async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-extension-'));
   const engine=new Engine({dataDir:path.join(root,'data'),downloadDir:path.join(root,'out')});
-  const bridge=await startBridge(engine,'extension-test-token');
+  const bridge=await startBridge(engine,'extension-test-token',17864,{selectDestination:async()=>{await new Promise(r=>setTimeout(r,300));return path.join(root,'out');}});
   const data=Buffer.alloc(256*1024,71);
   const fixture=http.createServer((req,res)=>{
     if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><a download href="/file.zip">Download file</a><video src="/clip.mp4" preload="auto"></video>');return;}
@@ -40,6 +40,11 @@ const {startBridge}=require('../src/bridge');
     await mediaPage.getByRole('link',{name:'Download file'}).click();
     for(let i=0;i<100&&engine.jobs.length<3;i++)await popup.waitForTimeout(50);
     assert.equal(engine.jobs.length,3);assert.deepEqual(errors,[]);
+    // Choosing a destination in the desktop app closes the browser popup. The
+    // service worker must continue its request even after that popup disappears.
+    await popup.locator('#url').fill(base+'/file.zip');await popup.locator('#send').click();await popup.close();
+    for(let i=0;i<100&&engine.jobs.length<4;i++)await new Promise(r=>setTimeout(r,50));
+    assert.equal(engine.jobs.length,4);
     console.log('Chromium extension passed: pairing, direct link handoff, media detection, automatic capture.');
   }finally{if(context)await context.close();await engine.close();await new Promise(r=>bridge.close(r));await new Promise(r=>fixture.close(r));fs.rmSync(root,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

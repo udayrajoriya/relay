@@ -54,6 +54,59 @@ test('pause and resume uses existing bytes and never overwrites a completed file
   await e.action(id,'resume');const j=await finish(e,id);assert.equal(hash(fs.readFileSync(j.filePath)),hash(payload));assert.ok(f.requests.slice(before).some(r=>r.range?.start===resumeFrom));
   const next=await finish(e,e.add({url:f.base+'/file',name:'same.zip'}));assert.notEqual(next.filePath,j.filePath);assert.ok(fs.existsSync(j.filePath));
 });
+test('custom destination holds all partial bytes and survives changed defaults and restart',async t=>{
+  const f=await fixture(t),e=f.create();const destination=path.join(f.root,'chosen folder');
+  const id=e.add({url:f.base+'/file',destination});
+  await until(()=>e.get(id).received>200000);await e.action(id,'pause');
+  const j=e.get(id);assert.equal(j.destination,destination);
+  assert.ok(fs.existsSync(path.join(destination,'.relay-parts',id)));
+  assert.equal(fs.existsSync(path.join(f.root,'data','parts')),false);
+  assert.equal(fs.existsSync(path.join(f.root,'out')),false);
+  const partial=j.parts.find(p=>p.done>0&&p.done<p.end-p.start+1),resumeFrom=partial.start+partial.done;
+  e.updateSettings({downloadDir:path.join(f.root,'new default')});await e.close();
+  const restored=f.create();assert.equal(restored.get(id).destination,destination);const before=f.requests.length;
+  await restored.action(id,'resume');const done=await finish(restored,id);
+  assert.ok(f.requests.slice(before).some(r=>r.range?.start===resumeFrom));
+  assert.ok(done.filePath.startsWith(destination+path.sep));assert.equal(hash(fs.readFileSync(done.filePath)),hash(payload));
+  assert.equal(fs.existsSync(path.join(destination,'.relay-parts')),false);
+});
+async function legacyDownload(f){
+  const e=f.create();const id=e.add({url:f.base+'/file'});await until(()=>e.get(id).received>200000);await e.action(id,'pause');await e.close();
+  const j=e.get(id),legacy=e.partsDir(j,true);fs.mkdirSync(legacy,{recursive:true});
+  for(const p of j.parts){const source=e.partPath(j,p);if(fs.existsSync(source))fs.copyFileSync(source,path.join(legacy,`${p.start}.part`));}
+  e.removeParts(j);
+  const stateFile=path.join(f.root,'data','state.json'),saved=JSON.parse(fs.readFileSync(stateFile,'utf8'));
+  delete saved.jobs[0].partsInDestination;fs.writeFileSync(stateFile,JSON.stringify(saved));
+  return {id,legacy,stateFile,saved};
+}
+test('legacy profile partials migrate to the destination without losing resume progress',async t=>{
+  const f=await fixture(t),old=await legacyDownload(f),e=f.create();
+  const j=e.get(old.id),partial=j.parts.find(p=>p.done>0&&p.done<p.end-p.start+1),resumeFrom=partial.start+partial.done;
+  // A previously interrupted copy must not replace the intact originals with stale bytes.
+  fs.mkdirSync(e.partsDir(j),{recursive:true});fs.writeFileSync(path.join(e.partsDir(j),`${partial.start}.part`),'incomplete migration');
+  const before=f.requests.length;await e.action(j.id,'resume');const done=await finish(e,j.id);
+  assert.equal(done.partsInDestination,true);assert.equal(fs.existsSync(old.legacy),false);
+  assert.ok(f.requests.slice(before).some(r=>r.range?.start===resumeFrom));assert.equal(hash(fs.readFileSync(done.filePath)),hash(payload));
+});
+test('failed legacy migration preserves the originals and can be retried',async t=>{
+  const f=await fixture(t),old=await legacyDownload(f);const unavailable=path.join(f.root,'unavailable');fs.writeFileSync(unavailable,'blocks the destination');
+  old.saved.jobs[0].destination=unavailable;fs.writeFileSync(old.stateFile,JSON.stringify(old.saved));
+  const e=f.create(),j=e.get(old.id),p=j.parts.find(p=>p.done>0),source=path.join(old.legacy,`${p.start}.part`),original=hash(fs.readFileSync(source));
+  await e.action(j.id,'resume');await until(()=>j.status==='error');assert.equal(j.partsInDestination,undefined);assert.equal(hash(fs.readFileSync(source)),original);
+  fs.unlinkSync(unavailable);fs.mkdirSync(unavailable);await e.action(j.id,'resume');const done=await finish(e,j.id);assert.equal(hash(fs.readFileSync(done.filePath)),hash(payload));
+});
+test('removing a partial download keeps other partials and completed files in its destination',async t=>{
+  const f=await fixture(t),e=f.create(),destination=path.join(f.root,'shared');
+  const a=e.get(e.add({url:f.base+'/file',destination,paused:true})),b=e.get(e.add({url:f.base+'/file',destination,paused:true}));
+  for(const j of [a,b]){fs.mkdirSync(e.partsDir(j),{recursive:true});fs.writeFileSync(path.join(e.partsDir(j),'0.part'),'partial bytes');}
+  const completed=path.join(destination,'keep.zip');fs.writeFileSync(completed,'existing completed file');
+  await e.action(a.id,'remove');assert.equal(fs.existsSync(e.partsDir(a)),false);assert.ok(fs.existsSync(e.partsDir(b)));assert.equal(fs.readFileSync(completed,'utf8'),'existing completed file');
+  await e.action(b.id,'remove');assert.equal(fs.existsSync(path.join(destination,'.relay-parts')),false);assert.ok(fs.existsSync(completed));
+});
+test('relative or unwritable per-download destinations are rejected before enqueueing',async t=>{
+  const f=await fixture(t),e=f.create();assert.throws(()=>e.add({url:f.base+'/file',destination:'relative/path'}),/absolute/);
+  const file=path.join(f.root,'file');fs.writeFileSync(file,'not a directory');assert.throws(()=>e.add({url:f.base+'/file',destination:file}));assert.equal(e.jobs.length,0);
+});
 test('saved state restores paused downloads after a process is forcibly killed',async t=>{
   const f=await fixture(t);const dataDir=path.join(f.root,'data'),downloadDir=path.join(f.root,'out');
   const script=`const {Engine}=require(${JSON.stringify(path.resolve(__dirname,'../src/engine'))});const e=new Engine(${JSON.stringify({dataDir,downloadDir})});e.updateSettings({bandwidthKB:1024});e.add({url:${JSON.stringify(f.base+'/file')}});e.on('change',s=>{if(s.jobs[0].received>200000&&s.jobs[0].status==='downloading')process.stdout.write('ready\\n')});`;
@@ -100,4 +153,21 @@ test('bridge rejects unauthenticated requests and validates download URLs',async
 });
 test('Windows filename and URL guards',()=>{
   assert.equal(safeName('../../bad:thing?.exe'),'.._.._bad_thing_.exe');assert.equal(safeName('CON.txt'),'_CON.txt');assert.throws(()=>validURL('javascript:alert(1)'));assert.throws(()=>validURL('https://user:secret@example.org/file'));
+});
+test('browser additions choose a per-download folder and cancellation leaves the queue unchanged',async t=>{
+  const f=await fixture(t),e=f.create();let selected=null,calls=0;const destination=path.join(f.root,'browser selected');
+  const bridge=await startBridge(e,'folder-token',0,{selectDestination:async()=>{calls++;return selected;}});
+  t.after(()=>new Promise(r=>bridge.close(r)));const base=`http://127.0.0.1:${bridge.address().port}`;
+  const add=url=>fetch(base+'/downloads',{method:'POST',headers:{Authorization:'Bearer folder-token'},body:JSON.stringify({url})});
+  assert.equal((await add('file:///invalid')).status,400);assert.equal(calls,0);
+  assert.equal((await add(f.base+'/small')).status,409);assert.equal(e.jobs.length,0);
+  selected=destination;const res=await add(f.base+'/small');assert.equal(res.status,201);const j=await finish(e,(await res.json()).id);
+  assert.equal(j.destination,destination);assert.equal(e.settings.downloadDir,path.join(f.root,'out'));assert.ok(j.filePath.startsWith(destination+path.sep));
+});
+test('disconnected browser handoffs never enqueue after the folder picker resolves',async t=>{
+  const f=await fixture(t),e=f.create();let release,opened=false;
+  const bridge=await startBridge(e,'folder-token',0,{selectDestination:()=>{opened=true;return new Promise(resolve=>release=resolve);}});
+  t.after(()=>new Promise(r=>bridge.close(r)));const controller=new AbortController();
+  const pending=fetch(`http://127.0.0.1:${bridge.address().port}/downloads`,{method:'POST',headers:{Authorization:'Bearer folder-token'},body:JSON.stringify({url:f.base+'/small'}),signal:controller.signal}).catch(()=>{});
+  await until(()=>opened);controller.abort();await pending;await sleep(50);release(path.join(f.root,'browser selected'));await sleep(50);assert.equal(e.jobs.length,0);
 });

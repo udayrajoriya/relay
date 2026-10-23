@@ -6,13 +6,20 @@ api.runtime.onInstalled.addListener(()=>{
 async function send(url,name){
   if(!/^https?:\/\//i.test(url))throw new Error('Only direct HTTP(S) links are supported.');
   const {token}=await api.storage.local.get('token');
-  const res=await fetch(endpoint+'/downloads',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token||''}`},body:JSON.stringify({url,name}),signal:AbortSignal.timeout(5000)});
+  const res=await fetch(endpoint+'/downloads',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token||''}`},body:JSON.stringify({url,name}),signal:AbortSignal.timeout(120000)});
   const data=await res.json();if(!res.ok)throw new Error(data.error);return data;
 }
 async function report(error){
   await api.storage.local.set({lastError:String(error.message||error)});
   api.action.setBadgeText({text:'!'});api.action.setBadgeBackgroundColor({color:'#ca6b6b'});
 }
+// A popup closes when the desktop folder dialog takes focus. Keep its handoff in
+// the background so choosing a folder does not cancel the request.
+api.runtime.onMessage.addListener((message,_sender,respond)=>{
+  if(message?.type!=='relay-download')return false;
+  send(message.url,message.name).then(data=>respond({ok:true,...data}),error=>{report(error);respond({ok:false,error:error.message});});
+  return true;
+});
 api.contextMenus.onClicked.addListener(info=>{if(info.menuItemId==='relay-link')send(info.linkUrl||info.srcUrl).catch(report);});
 api.downloads.onCreated.addListener(async item=>{
   const {capture}=await api.storage.local.get('capture');

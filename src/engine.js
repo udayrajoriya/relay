@@ -43,7 +43,7 @@ class Engine extends EventEmitter {
     super();
     this.dataDir = dataDir; this.db = path.join(dataDir, 'state.json'); this.jobs = []; this.active = new Map(); this.closing = false;
     this.settings = { downloadDir, connections: 6, simultaneous: 2, bandwidthKB: 0, organize: true };
-    fs.mkdirSync(path.join(dataDir, 'parts'), {recursive:true});
+    fs.mkdirSync(dataDir, {recursive:true});
     if (fs.existsSync(this.db)) {
       const saved = JSON.parse(fs.readFileSync(this.db, 'utf8'));
       this.settings = {...this.settings, ...saved.settings};
@@ -53,7 +53,41 @@ class Engine extends EventEmitter {
     this.throttleAt = 0; this.throttleEpoch = 0;
     this.timer = setInterval(() => { this.persist(); this.emit('change', this.snapshot()); this.pump(); }, 750);
   }
-  partPath(j, p) { return path.join(this.dataDir, 'parts', j.id, `${p.start}.part`); }
+  partsDir(j, legacy=false) {
+    // Resolve and check the exact task directory before recursive deletion or migration.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(j.id)) throw new Error('Invalid download ID.');
+    const root=legacy ? path.resolve(this.dataDir,'parts') : path.resolve(j.destination,'.relay-parts');
+    const target=path.resolve(root,j.id);
+    if(path.dirname(target)!==root) throw new Error('Invalid partial download directory.');
+    return target;
+  }
+  partPath(j, p) { return path.join(this.partsDir(j,!j.partsInDestination), `${p.start}.part`); }
+  removeParts(j, legacy=false) {
+    const dir=this.partsDir(j,legacy);
+    fs.rmSync(dir,{recursive:true,force:true});
+    // Remove only an empty container, leaving other downloads untouched.
+    try {fs.rmdirSync(path.dirname(dir));} catch {}
+  }
+  async migrateParts(j) {
+    if(j.partsInDestination) {this.removeParts(j,true);return;}
+    const destination=this.partsDir(j);
+    // Keep the original bytes until every copy is flushed and the new location is saved.
+    // An interrupted or failed migration can therefore be retried from the originals.
+    this.removeParts(j);
+    fs.mkdirSync(destination,{recursive:true});
+    for(const p of j.parts || []) {
+      const source=path.join(this.partsDir(j,true),`${p.start}.part`);
+      try {await fs.promises.access(source);} catch(e) {if(e.code==='ENOENT')continue;throw e;}
+      const target=path.join(destination,`${p.start}.part`);
+      await fs.promises.copyFile(source,target);
+      const handle=await fs.promises.open(target,'r+');
+      try {await handle.sync();} finally {await handle.close();}
+    }
+    j.partsInDestination=true;
+    try {this.persist();} catch(e) {j.partsInDestination=false;throw e;}
+    this.removeParts(j,true);
+    this.recount(j);
+  }
   recount(j) {
     if (j.status === 'completed') return;
     for (const p of j.parts || []) {
@@ -73,8 +107,13 @@ class Engine extends EventEmitter {
     if (this.jobs.filter(j=>j.status !== 'completed').length >= 500) throw new Error('The queue is full (500 unfinished downloads).');
     const connections = Math.max(1, Math.min(16, Number(input.connections) || this.settings.connections));
     const scheduledAt = input.scheduledAt ? new Date(input.scheduledAt).toISOString() : null;
+    const requestedDirectory=input.destination ?? this.settings.downloadDir;
+    if(typeof requestedDirectory!=='string' || !path.isAbsolute(requestedDirectory.trim())) throw new Error('Choose an absolute download directory.');
+    const destination=path.resolve(requestedDirectory.trim());
+    fs.mkdirSync(destination,{recursive:true});
+    fs.accessSync(destination,fs.constants.W_OK);
     let name; try { name = decodeURIComponent(new URL(url).pathname.split('/').pop()); } catch { name = 'download'; }
-    const j = {id:randomUUID(), url, name:safeName(input.name || name), customName:!!input.name, queue:String(input.queue || 'Main queue').slice(0,80), scheduledAt, maxConnections:connections, status:input.paused ? 'paused' : 'queued', size:null, received:0, speed:0, parts:[], createdAt:new Date().toISOString(), error:null, category:'Other', destination:this.settings.downloadDir, organize:this.settings.organize};
+    const j = {id:randomUUID(), url, name:safeName(input.name || name), customName:!!input.name, queue:String(input.queue || 'Main queue').slice(0,80), scheduledAt, maxConnections:connections, status:input.paused ? 'paused' : 'queued', size:null, received:0, speed:0, parts:[], createdAt:new Date().toISOString(), error:null, category:'Other', destination, partsInDestination:true, organize:this.settings.organize};
     this.jobs.push(j); this.changed(); this.pump(); return j.id;
   }
   get(id) { const j = this.jobs.find(j=>j.id===id); if (!j) throw new Error('Download not found.'); return j; }
@@ -91,8 +130,8 @@ class Engine extends EventEmitter {
         j.status = 'paused'; this.active.get(id).controller.abort();
         await this.active.get(id).promise;
       }
+      this.removeParts(j); this.removeParts(j,true);
       this.jobs = this.jobs.filter(x=>x.id!==id);
-      fs.rmSync(path.join(this.dataDir, 'parts', id), {recursive:true, force:true});
     } else if (action === 'up') {
       const i = this.jobs.indexOf(j); if (i > 0) [this.jobs[i-1],this.jobs[i]] = [j,this.jobs[i-1]];
     } else throw new Error('Unknown action.');
@@ -148,6 +187,8 @@ class Engine extends EventEmitter {
   async run(j,state) {
     const signal = state.controller.signal;
     j.status='probing'; j.error=null; this.emit('change',this.snapshot());
+    await this.migrateParts(j);
+    if(signal.aborted) throw new Error('Paused.');
     const info = await this.probe(j,signal);
     if (signal.aborted) throw new Error('Paused.');
     if (!j.customName && info.disposition) {
@@ -157,10 +198,10 @@ class Engine extends EventEmitter {
     }
     const canKeep = j.parts.length && info.ranges && info.validator && info.validator === j.validator && info.size === j.size;
     if (!canKeep) {
-      fs.rmSync(path.join(this.dataDir,'parts',j.id), {recursive:true, force:true});
+      this.removeParts(j);
       j.parts=[]; j.received=0;
     }
-    fs.mkdirSync(path.join(this.dataDir,'parts',j.id), {recursive:true});
+    fs.mkdirSync(this.partsDir(j), {recursive:true});
     j.size=info.size; j.ranges=info.ranges; j.validator=info.validator; j.category=category(j.name);
     if (!j.parts.length) {
       if (info.ranges && j.size > 0) {
@@ -194,7 +235,7 @@ class Engine extends EventEmitter {
     j.status='assembling'; this.changed();
     await this.assemble(j,signal);
     j.status='completed'; j.completedAt=new Date().toISOString(); j.received=j.size; this.changed();
-    fs.rmSync(path.join(this.dataDir,'parts',j.id), {recursive:true,force:true});
+    this.removeParts(j);
     this.emit('complete', {...j});
   }
   async transfer(j,p,signal) {
