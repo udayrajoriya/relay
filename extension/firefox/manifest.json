@@ -1,0 +1,11 @@
+{
+  "manifest_version":3,
+  "name":"Relay Companion",
+  "version":"0.1.0",
+  "description":"Send downloads and direct media files to the Relay desktop app.",
+  "permissions":["storage","contextMenus","downloads","webRequest","activeTab","scripting"],
+  "host_permissions":["http://*/*","https://*/*"],
+  "background":{"scripts":["background.js"]},
+  "action":{"default_popup":"popup.html","default_title":"Relay Companion"},
+  "browser_specific_settings":{"gecko":{"id":"relay-companion@local.relay","strict_min_version":"128.0","data_collection_permissions":{"required":["none"]}}}
+}

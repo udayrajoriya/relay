@@ -1,0 +1,9 @@
+.sidebar{padding:26px 17px;overflow-y:auto}
+.workspace-label{padding-top:30px}
+.nav-item{padding:10px 16px}
+#categories .nav-item{padding:9px 16px}
+.category-label{padding-top:20px}
+.sidebar-bottom{padding-top:12px}
+.engine-state{padding:16px 13px 14px}
+.version{margin-top:10px;padding-top:13px}
+@media(max-height:760px){.sidebar{padding-top:20px;padding-bottom:18px}.workspace-label{padding-top:22px}.category-label{padding-top:12px}.nav-item{padding-top:8px;padding-bottom:8px}#categories .nav-item{padding-top:6px;padding-bottom:6px}.engine-state{padding-top:10px}.brand{font-size:29px}}

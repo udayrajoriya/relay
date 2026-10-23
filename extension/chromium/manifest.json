@@ -1,0 +1,10 @@
+{
+  "manifest_version":3,
+  "name":"Relay Companion",
+  "version":"0.1.0",
+  "description":"Send downloads and direct media files to the Relay desktop app.",
+  "permissions":["storage","contextMenus","downloads","webRequest","activeTab","scripting"],
+  "host_permissions":["http://*/*","https://*/*"],
+  "background":{"service_worker":"background.js"},
+  "action":{"default_popup":"popup.html","default_title":"Relay Companion"}
+}
