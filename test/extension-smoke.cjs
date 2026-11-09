@@ -4,12 +4,17 @@ const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
 const http=require('node:http');
-const {Engine}=require('../src/engine');
-const {startBridge}=require('../src/bridge');
+const {spawn}=require('node:child_process');
+const readline=require('node:readline');
 (async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'relay-extension-'));
-  const engine=new Engine({dataDir:path.join(root,'data'),downloadDir:path.join(root,'out')});
-  const bridge=await startBridge(engine,'extension-test-token',17864,{selectDestination:async()=>{await new Promise(r=>setTimeout(r,300));return path.join(root,'out');}});
+  const executable=process.env.RELAY_TEST_HOST||path.resolve(__dirname,`../target/debug/examples/integration_host${process.platform==='win32'?'.exe':''}`);
+  const host=spawn(executable,[root],{stdio:['pipe','pipe','inherit']});
+  const lines=readline.createInterface({input:host.stdout})[Symbol.asyncIterator]();
+  const exited=new Promise(resolve=>host.once('exit',resolve));
+  await new Promise((resolve,reject)=>{host.once('error',reject);host.once('spawn',resolve);});
+  assert.equal((await lines.next()).value,'ready');
+  const state=async()=>{host.stdin.write('state\n');return JSON.parse((await lines.next()).value);};
   const data=Buffer.alloc(256*1024,71);
   const fixture=http.createServer((req,res)=>{
     if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><a download href="/file.zip">Download file</a><video src="/clip.mp4" preload="auto"></video>');return;}
@@ -29,22 +34,22 @@ const {startBridge}=require('../src/bridge');
     const errors=[];popup.on('pageerror',e=>errors.push(e.message));
     await popup.locator('#token').fill('extension-test-token');await popup.locator('#connect').click();await popup.waitForFunction(()=>document.querySelector('#status').textContent.includes('Connected'));
     await popup.locator('#url').fill(base+'/file.zip');await popup.locator('#send').click();await popup.waitForFunction(()=>document.querySelector('#status').textContent.includes('Added'));
-    assert.equal(engine.jobs.length,1);
+    assert.equal((await state()).jobs.length,1);
     const mediaPage=await context.newPage();await mediaPage.goto(base+'/');
     await popup.waitForTimeout(500);
     await mediaPage.bringToFront();await popup.locator('#refresh').evaluate(el=>el.click());
     await popup.waitForFunction(()=>document.querySelector('.media-item strong')?.textContent==='clip.mp4');
     await popup.locator('.media-item button').click();await popup.waitForFunction(()=>document.querySelector('.media-item button').textContent==='✓ Sent');
-    assert.ok(engine.jobs.some(j=>j.url.endsWith('/clip.mp4')));
+    assert.ok((await state()).jobs.some(j=>j.url.endsWith('/clip.mp4')));
     await popup.locator('#capture').check();
     await mediaPage.getByRole('link',{name:'Download file'}).click();
-    for(let i=0;i<100&&engine.jobs.length<3;i++)await popup.waitForTimeout(50);
-    assert.equal(engine.jobs.length,3);assert.deepEqual(errors,[]);
+    for(let i=0;i<100&&(await state()).jobs.length<3;i++)await popup.waitForTimeout(50);
+    assert.equal((await state()).jobs.length,3);assert.deepEqual(errors,[]);
     // Choosing a destination in the desktop app closes the browser popup. The
     // service worker must continue its request even after that popup disappears.
     await popup.locator('#url').fill(base+'/file.zip');await popup.locator('#send').click();await popup.close();
-    for(let i=0;i<100&&engine.jobs.length<4;i++)await new Promise(r=>setTimeout(r,50));
-    assert.equal(engine.jobs.length,4);
+    for(let i=0;i<100&&(await state()).jobs.length<4;i++)await new Promise(r=>setTimeout(r,50));
+    assert.equal((await state()).jobs.length,4);
     console.log('Chromium extension passed: pairing, direct link handoff, media detection, automatic capture.');
-  }finally{if(context)await context.close();await engine.close();await new Promise(r=>bridge.close(r));await new Promise(r=>fixture.close(r));fs.rmSync(root,{recursive:true,force:true});}
+  }finally{if(context)await context.close();host.stdin.write('close\n');await exited;await new Promise(r=>fixture.close(r));fs.rmSync(root,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exitCode=1;});

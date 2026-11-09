@@ -1,0 +1,68 @@
+name: Rust desktop
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev xvfb
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - run: cargo build --locked --release
+      - name: Test native Linux window
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python test/native-smoke.py target/release/relay --artifacts dist/smoke
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WINIT_UNIX_BACKEND: x11
+      - run: python scripts/package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Relay-${{ runner.os }}
+          retention-days: 7
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: cargo build --locked --no-default-features --example integration_host
+      - name: Install browser test tools outside the app
+        run: |
+          npm install --prefix "$RUNNER_TEMP/relay-browser" playwright@1.65.0
+          "$RUNNER_TEMP/relay-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - run: node test/extension-smoke.cjs
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/relay-browser/node_modules/playwright
