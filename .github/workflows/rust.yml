@@ -83,6 +83,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - run: node --test --test-timeout=10000 test/extension-capture.test.cjs
       - run: cargo build --locked --no-default-features --example integration_host
       - name: Install browser test tools outside the app
         run: |

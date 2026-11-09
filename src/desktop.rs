@@ -239,10 +239,7 @@ impl Desktop {
         });
         ui.add_space(12.0);
         ui.label("Direct HTTP(S) files only. DRM, HLS/DASH, and browser login cookies are not supported.");
-        ui.label(format!(
-            "Relay {} · native Rust desktop",
-            env!("CARGO_PKG_VERSION")
-        ));
+        ui.label(format!("Relay {}", env!("CARGO_PKG_VERSION")));
     }
     fn add_ui(&mut self, ctx: &egui::Context) {
         let mut open = self.show_add;
@@ -544,9 +541,7 @@ impl eframe::App for Desktop {
                     self.view = "Settings".into();
                 }
                 ui.add_space(16.0);
-                ui.label(
-                    RichText::new(format!("Native Rust · v{}", env!("CARGO_PKG_VERSION"))).weak(),
-                );
+                ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).weak());
             });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {

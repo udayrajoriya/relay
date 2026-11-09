@@ -27,5 +27,11 @@ with tempfile.TemporaryDirectory(prefix="relay-native-smoke-") as temporary:
     assert state["jobs"] == []
     assert Path(state["settings"]["downloadDir"]) == root / "downloads"
     for browser in ("chromium", "firefox"):
-        assert list((profile / "extensions").glob(f"*/{browser}/manifest.json"))
+        manifests = list((profile / "extensions").glob(f"*/{browser}/manifest.json"))
+        assert len(manifests) == 1
+        source = Path(__file__).resolve().parent.parent / "extension" / browser
+        for file in source.rglob("*"):
+            if file.is_file():
+                embedded = manifests[0].parent / file.relative_to(source)
+                assert embedded.read_bytes() == file.read_bytes(), f"Outdated embedded companion: {file.name}"
 print("Native smoke passed: window, downloads view, add form, settings, profile persistence, embedded companions, clean shutdown.")

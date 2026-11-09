@@ -43,7 +43,7 @@ fn run() -> Result<()> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Relay — native download manager\n\nrelay [--profile DIRECTORY] [--downloads DIRECTORY]\nrelay --version"
+                    "Relay — download manager\n\nrelay [--profile DIRECTORY] [--downloads DIRECTORY]\nrelay --version"
                 );
                 return Ok(());
             }

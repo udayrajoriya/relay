@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Relay
-Comment=Native download manager with segmented transfers and persistent queues
+Comment=Download manager with segmented transfers and persistent queues
 Exec=relay
 Icon=relay
 Terminal=false

@@ -1,6 +1,6 @@
 # Relay
 
-A native Rust download manager for Linux and Windows. Relay uses egui/eframe for its desktop interface, Tokio for background work, and reqwest with Rustls for HTTP(S) transfers. The app runs without Electron, Node.js, or a webview.
+A native Rust download manager for Linux and Windows. Relay uses egui/eframe for its desktop interface, Tokio for background work, and reqwest with Rustls for HTTP(S) transfers.
 
 ## Run from source
 
@@ -29,18 +29,18 @@ cargo build --locked --release
 python scripts/package.py
 ```
 
-On Linux x64, this produces `dist/Relay-0.2.0-Linux-x64.tar.gz`:
+On Linux x64, this produces `dist/Relay-0.2.1-Linux-x64.tar.gz`:
 
 ```sh
-tar -xzf dist/Relay-0.2.0-Linux-x64.tar.gz
-./Relay-0.2.0-Linux-x64/relay
+tar -xzf dist/Relay-0.2.1-Linux-x64.tar.gz
+./Relay-0.2.1-Linux-x64/relay
 ```
 
-On Windows x64, this produces `dist/Relay-0.2.0-Windows-x64.zip`. Extract it and run `relay.exe`. The native binary embeds both browser companions; no separate extension download is necessary. Windows builds are unsigned.
+On Windows x64, this produces `dist/Relay-0.2.1-Windows-x64.zip`. Extract it and run `relay.exe`. The native binary embeds both browser companions; no separate extension download is necessary. Windows builds are unsigned.
 
-The Linux archive includes an optional desktop entry and icon. Put the binary on your `PATH`, install `local.relay.downloads.desktop` under `~/.local/share/applications/`, and install `relay.png` as `~/.local/share/icons/hicolor/256x256/apps/relay.png` to add an application-menu entry. The native Linux archive does not need FUSE. The old Electron AppImage and Windows `.exe` packaging scripts have been replaced by these native packages.
+The Linux archive includes an optional desktop entry and icon. Put the binary on your `PATH`, install `local.relay.downloads.desktop` under `~/.local/share/applications/`, and install `relay.png` as `~/.local/share/icons/hicolor/256x256/apps/relay.png` to add an application-menu entry.
 
-The [Rust desktop workflow](.github/workflows/rust.yml) runs checks for pushes and pull requests. After the Linux, Windows, and browser checks pass on `master`, it automatically publishes a GitHub Release named for the version in `Cargo.toml` (for example, `v0.2.0`). The release contains the Linux tar.gz, Windows zip, generated notes, and `SHA256SUMS`. Uploaded assets are downloaded again and checked against their local SHA-256 hashes before the draft release is published.
+The [Rust desktop workflow](.github/workflows/rust.yml) runs checks for pushes and pull requests. After the Linux, Windows, and browser checks pass on `master`, it automatically publishes a GitHub Release named for the version in `Cargo.toml` (for example, `v0.2.1`). The release contains the Linux tar.gz, Windows zip, generated notes, and `SHA256SUMS`. Uploaded assets are downloaded again and checked against their local SHA-256 hashes before the draft release is published.
 
 A published version is never overwritten. To release the next version, update `version` in `Cargo.toml`, run `cargo check` to refresh `Cargo.lock`, and commit both files to `master`. You can also manually run the workflow on `master` to retry an unpublished version. Draft retries must target the same commit. Prerelease versions such as `0.3.0-rc.1` are marked as prereleases.
 
@@ -56,15 +56,15 @@ Settings control the default destination, connections per file, simultaneous dow
 
 Closing Relay cancels active requests, flushes partial files, and saves running jobs as paused. Reopen Relay and choose **Resume all** to continue. Scheduled jobs need Relay open and the computer awake; overdue queued work starts when Relay opens. Completion notifications depend on your desktop notification service.
 
-## Existing Electron profiles
+## Download data and recovery
 
-Close the Electron version before opening the Rust version. Relay keeps the existing JSON history, pairing token, and partial-file layout:
+Relay stores download history, preferences, and the private browser pairing token in your app profile:
 
 - Windows profile: `%APPDATA%/relay-download-manager/`.
 - Linux profile: `$XDG_CONFIG_HOME/relay-download-manager/`, normally `~/.config/relay-download-manager/`.
 - Partial bytes: `<chosen directory>/.relay-parts/<download ID>/`.
 
-Back up the profile and partial directories before switching between versions. The Rust app reads existing `state.json` files directly, reuses the existing browser token, recounts partial bytes from disk, and restores interrupted jobs as paused. Older partial data in the profile's `parts/` folder is copied into the saved destination before resume; originals remain until migration succeeds. Unavailable destinations report an error and retain the originals for retry. Corrupt history stops startup instead of replacing the original file.
+Back up the profile and partial directories when moving to another computer. Queues and preferences are saved in `state.json`. Relay recounts partial bytes from disk and restores interrupted transfers as paused. If a destination is unavailable, it reports an error and preserves the partial data for retry. Corrupt history stops startup instead of replacing the original file.
 
 Resume reuses bytes only when file size and a strong ETag or Last-Modified validator match. Missing or changed validators trigger a safe restart. Servers that ignore byte ranges use a single connection and restart on resume. Transient segment failures retry up to three attempts. Final assembly happens on the destination drive, flushes the staging file, and publishes without overwriting existing files. Filesystems without hard-link support use an exclusive-copy fallback. Physical disk corruption and power-loss recovery are not guaranteed.
 
@@ -76,11 +76,13 @@ cargo run -- --profile /absolute/test-profile --downloads /absolute/test-downloa
 
 ## Browser integration
 
-1. Open **Settings & integration → Open extension folder**. The embedded companions are extracted under the profile's `extensions/0.2.0/` directory.
+1. Open **Settings & integration → Open extension folder**. The embedded companions are extracted under the profile's `extensions/0.2.1/` directory.
 2. **Chrome:** open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `chromium`. **Edge:** use `edge://extensions`.
 3. **Firefox:** open `about:debugging`, choose **This Firefox → Load Temporary Add-on**, and select `firefox/manifest.json`. The temporary installation lasts until Firefox restarts. Signed distribution is not included.
 4. In Relay, click **Copy pairing token**. Paste it into the companion popup and click **Connect**.
-5. Right-click a link or media element and choose **Download with Relay**, paste a direct URL into the popup, or enable automatic capture. Relay asks for a destination for every browser download. Canceling the picker leaves the browser's original download running.
+5. Right-click a link or media element and choose **Download with Relay**, paste a direct URL into the popup, or enable automatic capture. Relay asks for a destination for every browser download. Automatic capture pauses the browser download while you choose a folder. Relay acceptance cancels that browser download; canceling the picker or a failed handoff resumes it. Downloads that complete before they can be paused stay in the browser and are not sent to Relay again.
+
+After updating Relay, remove the previously loaded companion before loading the companion from the new extension folder, then pair it again. Keep only one Relay companion enabled in each browser. When using a source checkout at the same path, use the browser extension manager’s Reload button instead.
 
 The bridge binds only to `127.0.0.1:17864`. Requests require a private 256-bit pairing token from your profile. Keep it private. Browser handoffs that disconnect while waiting for a folder are discarded. If the port is occupied, Relay still opens and reports that browser integration is unavailable.
 
@@ -91,13 +93,14 @@ Media support covers direct HTTP(S) files such as MP4, WebM, and MP3. DRM, HLS/D
 ## Verify changes
 
 ```sh
+node --test --test-timeout=10000 test/extension-capture.test.cjs
 python -m unittest discover -s test -p 'test_release.py'
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-Rust tests use local HTTP fixtures to check segmented transfers and SHA-256 integrity, pause/resume, forced process termination, custom destinations, legacy migration and failed migration, validator changes, no-range fallback, unknown lengths, empty files, retries, protocol errors, scheduling, queue order, bandwidth caps, bridge authentication, canceled and disconnected handoffs, safe filenames, atomic profile writes, and exclusive profile locking.
+Rust tests use local HTTP fixtures to check segmented transfers and SHA-256 integrity, pause/resume, forced process termination, custom destinations, partial-data recovery and failed destination recovery, validator changes, no-range fallback, unknown lengths, empty files, retries, protocol errors, scheduling, queue order, bandwidth caps, bridge authentication, canceled and disconnected handoffs, safe filenames, atomic profile writes, and exclusive profile locking.
 
 The core can be tested without building desktop dependencies:
 
@@ -114,7 +117,7 @@ python test/native-smoke.py --artifacts dist/smoke
 xvfb-run -a python test/native-smoke.py --artifacts dist/smoke
 ```
 
-The browser smoke test additionally needs Node.js and Playwright **only as test tools**. Install Playwright outside the project or set `PLAYWRIGHT_MODULE` to an existing installation:
+Browser tests use Node.js; the smoke test also needs Playwright. These are **test tools only**. Install Playwright outside the project or set `PLAYWRIGHT_MODULE` to an existing installation:
 
 ```sh
 cargo build --locked --no-default-features --example integration_host
@@ -123,12 +126,12 @@ npm install --prefix /tmp/relay-browser playwright@1.65.0
 PLAYWRIGHT_MODULE=/tmp/relay-browser/node_modules/playwright node test/extension-smoke.cjs
 ```
 
-The test drives the real Rust engine and bridge through a test-only host and checks pairing, direct-link handoff, media detection, automatic capture, and popup-close behavior. The host automatically selects an isolated test destination; the desktop app always uses the native folder picker.
+The test drives the real Rust engine and bridge on an isolated loopback port through a test-only host. It checks pairing, direct-link handoff, media detection, browser pause/cancel during automatic capture, resume after canceled or failed handoffs, and popup-close behavior. The host automatically selects an isolated test destination; the desktop app always uses the native folder picker.
 
 ## Source layout
 
 - `src/engine.rs`: transfers, resume, scheduling, queues, and file publication.
-- `src/model.rs` and `src/profile.rs`: compatible state models, atomic persistence, tokens, and profile locking.
+- `src/model.rs` and `src/profile.rs`: state models, atomic persistence, tokens, and profile locking.
 - `src/bridge.rs`: authenticated local browser protocol.
 - `src/desktop.rs` and `src/main.rs`: native interface and application lifecycle.
 - `extension/`: JavaScript browser companions required by Chrome/Edge and Firefox extension APIs.

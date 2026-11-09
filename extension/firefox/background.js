@@ -22,10 +22,28 @@ api.runtime.onMessage.addListener((message,_sender,respond)=>{
 });
 api.contextMenus.onClicked.addListener(info=>{if(info.menuItemId==='relay-link')send(info.linkUrl||info.srcUrl).catch(report);});
 api.downloads.onCreated.addListener(async item=>{
-  const {capture}=await api.storage.local.get('capture');
-  if(!capture || !/^https?:\/\//i.test(item.finalUrl||item.url))return;
-  // The browser keeps its download if the desktop handoff fails.
-  try {await send(item.finalUrl||item.url);await api.downloads.cancel(item.id);}catch(e){report(e);}
+  let paused=false,accepted=false;
+  try{
+    const {capture}=await api.storage.local.get('capture');
+    const url=item.finalUrl||item.url;
+    if(!capture || !/^https?:\/\//i.test(url) || item.paused || item.state!=='in_progress')return;
+    // Folder selection can take longer than the entire browser download. Pause
+    // first; if that is already too late, keep the browser copy without handing
+    // the same file to Relay as well.
+    await api.downloads.pause(item.id);paused=true;
+    await send(url);accepted=true;
+    await api.downloads.cancel(item.id);
+  }catch(error){
+    let message=error.message||String(error);
+    if(paused && !accepted){
+      try{await api.downloads.resume(item.id);}
+      catch{message+=' Resume the original download from your browser downloads if it is still paused.';}
+    }
+    // Once Relay has accepted, a cancel failure must not resume a second copy.
+    if(!paused)message='The download was kept in your browser because capture could not pause it. '+message;
+    if(accepted)message='Relay accepted this download. Keep its browser copy paused and cancel it in your browser downloads. '+message;
+    await report(new Error(message));
+  }
 });
 // Serialize storage updates so parallel media requests cannot overwrite each other.
 let writes=Promise.resolve();
