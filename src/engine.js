@@ -284,7 +284,7 @@ class Engine extends EventEmitter {
         const ext=path.extname(j.name); const name=n?`${path.basename(j.name,ext)} (${n})${ext}`:j.name;
         const dest=path.join(folder,name);
         try {
-          // Same-volume hard links publish the fully flushed file atomically on NTFS.
+          // Same-volume hard links publish the fully flushed file atomically on filesystems with hard-link support.
           try {await fs.promises.link(staging,dest);}
           catch(e) {
             if (!['EPERM','ENOTSUP','EOPNOTSUPP','ENOSYS'].includes(e.code)) throw e;

@@ -17,7 +17,7 @@ const {createHash}=require('node:crypto');
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   let app;
   try{
-    app=await _electron.launch({executablePath:process.env.RELAY_EXECUTABLE||path.resolve(__dirname,'../node_modules/electron/dist/electron.exe'),args:[...(process.env.RELAY_EXECUTABLE?[]:[path.resolve(__dirname,'..')]),`--user-data-dir=${userData}`]});
+    app=await _electron.launch({executablePath:process.env.RELAY_EXECUTABLE||require('electron'),args:[...(process.env.RELAY_EXECUTABLE?[]:[path.resolve(__dirname,'..')]),`--user-data-dir=${userData}`]});
     const page=await app.firstWindow();const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.waitForFunction(()=>document.querySelector('#stat-segments').textContent.includes('6'));
     // Keep test output in the isolated profile.
@@ -49,7 +49,10 @@ const {createHash}=require('node:crypto');
     assert.ok(fs.existsSync(path.join(chosen,'.relay-parts',paused.jobs[0].id)));assert.equal(fs.existsSync(path.join(userData,'parts')),false);
     await page.getByRole('button',{name:'Resume Desktop test.zip',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('.status-label')?.textContent==='Completed');
-    const state=await page.evaluate(()=>window.relay.state());assert.equal(state.jobs.length,1);assert.equal(state.jobs[0].status,'completed');
+    const state=await page.evaluate(()=>window.relay.state());
+    assert.ok(fs.existsSync(path.join(state.extensionDir,'chromium','manifest.json')));
+    assert.ok(fs.existsSync(path.join(state.extensionDir,'firefox','manifest.json')));
+    assert.equal(state.jobs.length,1);assert.equal(state.jobs[0].status,'completed');
     assert.ok(state.jobs[0].filePath.startsWith(chosen+path.sep));assert.equal(fs.existsSync(path.join(chosen,'.relay-parts')),false);
     const digest=b=>createHash('sha256').update(b).digest('hex');assert.equal(digest(fs.readFileSync(state.jobs[0].filePath)),digest(fixture));
     // Exercise the actual desktop browser-folder picker through its HTTP bridge.

@@ -1,0 +1,52 @@
+name: Linux
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Install desktop test dependencies
+        run: |
+          npm install --no-save --package-lock=false playwright@1.65.0
+          npx playwright install --with-deps chromium
+      - name: Test desktop from source
+        run: xvfb-run -a npm run test:desktop
+      - name: Test browser integration
+        run: npm run test:extension
+      - name: Build Linux packages
+        run: npm run dist:linux
+      - name: Test packaged desktop
+        run: xvfb-run -a npm run test:desktop
+        env:
+          RELAY_EXECUTABLE: ${{ github.workspace }}/dist/linux-unpacked/relay
+      - name: Extract AppImage without FUSE
+        run: |
+          mkdir -p dist/appimage-smoke
+          cd dist/appimage-smoke
+          ../Relay-*-Linux-*.AppImage --appimage-extract > /dev/null
+      - name: Test AppImage launcher
+        run: xvfb-run -a npm run test:packaged
+        env:
+          RELAY_EXECUTABLE: ${{ github.workspace }}/dist/appimage-smoke/squashfs-root/AppRun
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Relay-Linux-x64
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz
+          if-no-files-found: error

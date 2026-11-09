@@ -1,12 +1,60 @@
 {
   "name": "relay-download-manager",
   "version": "0.1.0",
-  "description": "A Windows download manager with segmented transfers and persistent queues",
+  "description": "A desktop download manager for Windows and Linux with segmented transfers and persistent queues",
   "main": "src/main.js",
   "author": "Relay",
   "license": "MIT",
-  "engines": { "node": ">=22.12.0" },
-  "scripts": { "start": "electron .", "test": "node --test test/*.test.js", "dist": "electron-builder --win portable", "pack": "electron-builder --dir" },
-  "devDependencies": { "electron": "45.0.0", "electron-builder": "26.15.3" },
-  "build": { "appId": "local.relay.downloads", "productName": "Relay", "files": ["src/**/*", "package.json"], "extraResources": [{"from":"extension","to":"extension"}], "win": { "target": "portable", "icon":"src/assets/icon.ico", "signExecutable": false }, "portable": { "artifactName": "Relay-${version}-Windows.exe" } }
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder",
+    "pack": "electron-builder --dir",
+    "dist:linux": "electron-builder --linux --x64",
+    "dist:win": "electron-builder --win portable --x64",
+    "test:desktop": "node test/desktop-smoke.cjs",
+    "test:extension": "node test/extension-smoke.cjs",
+    "test:packaged": "node test/portable-smoke.cjs"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "local.relay.downloads",
+    "productName": "Relay",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "extension"
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "src/assets/icon.ico",
+      "signExecutable": false
+    },
+    "portable": {
+      "artifactName": "Relay-${version}-Windows.exe"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "icon": "src/assets/icon.png",
+      "category": "Network",
+      "executableName": "relay",
+      "artifactName": "Relay-${version}-Linux-${arch}.${ext}",
+      "syncDesktopName": true
+    }
+  },
+  "desktopName": "local.relay.downloads.desktop"
 }
