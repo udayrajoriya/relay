@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Relay
+Comment=Native download manager with segmented transfers and persistent queues
+Exec=relay
+Icon=relay
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+StartupWMClass=local.relay.downloads

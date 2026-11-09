@@ -1,0 +1,51 @@
+[package]
+name = "relay-download-manager"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A native Rust download manager for Linux and Windows"
+license = "MIT"
+
+[lib]
+name = "relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "relay"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:eframe", "dep:rfd", "dep:arboard", "dep:open", "dep:notify-rust", "dep:image"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"], optional = true }
+rfd = { version = "0.15", optional = true }
+arboard = { version = "3", default-features = false, optional = true }
+open = { version = "5", optional = true }
+notify-rust = { version = "4", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+fs2 = "0.4"
+httparse = "1"
+percent-encoding = "2"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "signal"] }
+tokio-util = "0.7"
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+sha2 = "0.10"
+
+[profile.release]
+lto = "thin"
+strip = true
