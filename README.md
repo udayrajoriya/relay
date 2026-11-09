@@ -9,7 +9,7 @@ Install the [stable Rust toolchain](https://rustup.rs/) and a C/C++ linker. Wind
 Typical Ubuntu/Debian build dependencies:
 
 ```sh
-sudo apt-get install build-essential pkg-config libxkbcommon-dev libwayland-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
+sudo apt-get install build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
 ```
 
 Then, on either platform:
@@ -40,7 +40,11 @@ On Windows x64, this produces `dist/Relay-0.2.0-Windows-x64.zip`. Extract it and
 
 The Linux archive includes an optional desktop entry and icon. Put the binary on your `PATH`, install `local.relay.downloads.desktop` under `~/.local/share/applications/`, and install `relay.png` as `~/.local/share/icons/hicolor/256x256/apps/relay.png` to add an application-menu entry. The native Linux archive does not need FUSE. The old Electron AppImage and Windows `.exe` packaging scripts have been replaced by these native packages.
 
-The [Rust desktop workflow](.github/workflows/rust.yml) is configured to test and package Linux and Windows on pushes and pull requests. Packages are stored as Actions artifacts for seven days. It does **not** publish GitHub Releases.
+The [Rust desktop workflow](.github/workflows/rust.yml) runs checks for pushes and pull requests. After the Linux, Windows, and browser checks pass on `master`, it automatically publishes a GitHub Release named for the version in `Cargo.toml` (for example, `v0.2.0`). The release contains the Linux tar.gz, Windows zip, generated notes, and `SHA256SUMS`. Uploaded assets are downloaded again and checked against their local SHA-256 hashes before the draft release is published.
+
+A published version is never overwritten. To release the next version, update `version` in `Cargo.toml`, run `cargo check` to refresh `Cargo.lock`, and commit both files to `master`. You can also manually run the workflow on `master` to retry an unpublished version. Draft retries must target the same commit. Prerelease versions such as `0.3.0-rc.1` are marked as prereleases.
+
+Temporary Actions artifacts are uploaded only for release candidates. After successful publication, the workflow deletes its own Linux and Windows artifacts; the release assets remain available. If checks or publication fail, temporary artifacts expire after one day. Pull requests, feature branches, and already-published versions do not upload package artifacts.
 
 ## Use Relay
 
@@ -87,6 +91,7 @@ Media support covers direct HTTP(S) files such as MP4, WebM, and MP3. DRM, HLS/D
 ## Verify changes
 
 ```sh
+python -m unittest discover -s test -p 'test_release.py'
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets

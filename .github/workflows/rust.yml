@@ -8,8 +8,32 @@ on:
 permissions:
   contents: read
 
+# Serialize each branch so two master runs cannot race to publish the same version.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  release-plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test release publication and cleanup
+        run: python -m unittest discover -s test -p 'test_release.py'
+      - name: Plan versioned release
+        id: plan
+        run: python scripts/release.py plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   build:
+    needs: release-plan
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +52,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev xvfb
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libegl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev xvfb
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
@@ -41,9 +65,10 @@ jobs:
           WINIT_UNIX_BACKEND: x11
       - run: python scripts/package.py
       - uses: actions/upload-artifact@v4
+        if: needs.release-plan.outputs.publish == 'true'
         with:
           name: Relay-${{ runner.os }}
-          retention-days: 7
+          retention-days: 1
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -66,3 +91,33 @@ jobs:
       - run: node test/extension-smoke.cjs
         env:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/relay-browser/node_modules/playwright
+
+  release:
+    needs: [release-plan, build, browser]
+    if: >-
+      needs.release-plan.outputs.publish == 'true' &&
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Relay-*
+          merge-multiple: true
+          path: release-assets
+      - name: Upload, verify, and publish versioned release
+        run: python scripts/release.py publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Remove temporary artifacts after publication
+        run: python scripts/release.py cleanup
+        env:
+          GH_TOKEN: ${{ github.token }}
