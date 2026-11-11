@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix="relay-native-smoke-") as temporary:
     marker = artifacts / "native-smoke.txt"
     subprocess.run([str(executable), "--profile", str(root / "profile"), "--downloads", str(root / "downloads"), "--smoke-test", str(marker)], check=True, timeout=45)
     assert "native UI rendered" in marker.read_text()
-    for view in ("main", "add", "settings"):
+    for view in ("main", "add", "settings", "update-link"):
         screenshot = marker.with_suffix(f".{view}.png")
         assert screenshot.stat().st_size > 1000, f"No native {view} screenshot"
     profile = root / "profile"
@@ -34,4 +34,4 @@ with tempfile.TemporaryDirectory(prefix="relay-native-smoke-") as temporary:
             if file.is_file():
                 embedded = manifests[0].parent / file.relative_to(source)
                 assert embedded.read_bytes() == file.read_bytes(), f"Outdated embedded companion: {file.name}"
-print("Native smoke passed: window, downloads view, add form, settings, profile persistence, embedded companions, clean shutdown.")
+print("Native smoke passed: window, downloads view, add form, settings, update-link dialog, profile persistence, embedded companions, clean shutdown.")

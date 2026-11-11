@@ -168,7 +168,7 @@ impl Engine {
             j.category = category(&j.name).into();
         }
         let client = Client::builder()
-            .user_agent("Relay/0.2")
+            .user_agent(concat!("Relay/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(25))
             .read_timeout(Duration::from_secs(25))
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -326,6 +326,7 @@ impl Engine {
             validator: None,
             file_path: None,
             completed_at: None,
+            last_url_update_at: None,
             connections: 0,
         };
         let id = job.id.clone();
@@ -354,6 +355,9 @@ impl Engine {
     }
     pub async fn action(&self, id: &str, action: &str) -> Result<()> {
         let _control = self.0.control.lock().await;
+        self.action_locked(id, action).await
+    }
+    async fn action_locked(&self, id: &str, action: &str) -> Result<()> {
         self.get(id)?;
         match action {
             "pause" | "remove" => {
@@ -407,6 +411,73 @@ impl Engine {
             _ => bail!("Unknown action."),
         }
         self.persist()
+    }
+    /// Validate a new source without discarding any saved segments.
+    pub async fn replace_url(&self, id: &str, input: &str, resume: bool) -> Result<Job> {
+        let url = valid_url(input.trim())?.to_string();
+        // Serialize with pause/remove/resume and shutdown for the whole transaction.
+        let _control = self.0.control.lock().await;
+        ensure!(!self.0.closing.load(Ordering::SeqCst), "Relay is closing.");
+        ensure!(
+            self.get(id)?.status != "completed",
+            "This download is already complete."
+        );
+        self.action_locked(id, "pause").await?;
+        let mut previous = self.get(id)?;
+        ensure!(
+            previous.status != "completed",
+            "This download finished before its link could be updated."
+        );
+        recount(&self.0.data, &mut previous)?;
+        self.update(id, |j| *j = previous.clone());
+        self.persist()?;
+        let (size, ranges, validator, _) = tokio::time::timeout(
+            Duration::from_secs(30),
+            self.probe(&url, &CancellationToken::new()),
+        )
+        .await
+        .context("Replacement link check timed out. Saved progress has been kept.")??;
+        if previous.received > 0 {
+            ensure!(
+                ranges,
+                "The replacement link does not support byte ranges. Saved progress has been kept."
+            );
+            ensure!(
+                previous.size.is_some() && size == previous.size,
+                "The replacement file has a different or unknown size. Saved progress has been kept."
+            );
+            ensure!(
+                previous.validator.is_some() && validator == previous.validator,
+                "The replacement file identifier does not match, or cannot be verified. Saved progress has been kept; use a link to the same file."
+            );
+            let checkpoint = previous
+                .destination
+                .join(".relay-recovery")
+                .join(&previous.id);
+            fs::create_dir_all(&checkpoint)?;
+            atomic_json(
+                &checkpoint.join(format!("before-url-update-{}.json", Uuid::new_v4())),
+                &previous,
+            )?;
+        }
+        let mut state = self.0.state.lock().unwrap();
+        let index = state
+            .jobs
+            .iter()
+            .position(|j| j.id == id)
+            .context("Download not found")?;
+        let j = &mut state.jobs[index];
+        j.url = url;
+        j.status = if resume { "queued" } else { "paused" }.into();
+        j.error = None;
+        j.custom_name = true;
+        j.scheduled_at = None;
+        j.last_url_update_at = Some(Utc::now());
+        if let Err(error) = atomic_json(&self.0.data.join("state.json"), &*state) {
+            state.jobs[index] = previous;
+            return Err(error);
+        }
+        Ok(state.jobs[index].clone())
     }
     fn pump(&self) {
         if self.0.closing.load(Ordering::SeqCst) {
@@ -546,11 +617,13 @@ impl Engine {
         remove_parts(&self.0.data, &j, true)?;
         Ok(())
     }
-    async fn run(&self, id: &str, cancel: &CancellationToken) -> Result<()> {
-        self.migrate(id)?;
-        let mut j = self.get(id)?;
+    async fn probe(
+        &self,
+        url: &str,
+        cancel: &CancellationToken,
+    ) -> Result<(Option<u64>, bool, Option<String>, Option<String>)> {
         let response = self
-            .request(&j.url, Some("bytes=0-0".into()), None, cancel)
+            .request(url, Some("bytes=0-0".into()), None, cancel)
             .await?;
         let status = response.status().as_u16();
         let h = response.headers();
@@ -562,7 +635,8 @@ impl Engine {
         let empty = status == 416 && content_range.as_deref() == Some("bytes */0");
         ensure!(
             empty || matches!(status, 200 | 206),
-            "Server returned HTTP {status}."
+            "{}",
+            http_error(status)
         );
         let size = if empty {
             Some(0)
@@ -579,19 +653,29 @@ impl Engine {
             && range_size.is_some()
             && text(h, "content-encoding").is_none_or(|s| s == "identity");
         let validator = validator(h);
+        Ok((size, ranges, validator, text(h, "content-disposition")))
+    }
+    async fn run(&self, id: &str, cancel: &CancellationToken) -> Result<()> {
+        self.migrate(id)?;
+        let mut j = self.get(id)?;
+        let (size, ranges, validator, disposition) = self.probe(&j.url, cancel).await?;
         if !j.custom_name
-            && let Some(disposition) = text(h, "content-disposition")
+            && let Some(disposition) = disposition
             && let Some(name) = disposition_name(&disposition)
         {
             j.name = safe_name(&name);
         }
-        drop(response);
         ensure!(!cancel.is_cancelled(), "Paused.");
         let keep = !j.parts.is_empty()
             && ranges
             && validator.is_some()
             && validator == j.validator
             && size == j.size;
+        recount(&self.0.data, &mut j)?;
+        ensure!(
+            j.received == 0 || keep,
+            "The server cannot safely resume this file: its size, identifier, or range support changed. Saved progress has been kept. Use Update link with a link to the same file."
+        );
         if !keep {
             remove_parts(&self.0.data, &j, false)?;
             j.parts.clear();
@@ -743,6 +827,9 @@ impl Engine {
                 cancel,
             )
             .await?;
+        if !response.status().is_success() {
+            return Err(ProtocolError(http_error(response.status().as_u16())).into());
+        }
         if j.ranges {
             if response.status().as_u16() != 206
                 || text(response.headers(), "content-range")
@@ -753,7 +840,7 @@ impl Engine {
                     ))
             {
                 return Err(ProtocolError(
-                    "Server changed or ignored a range. Resume to safely restart this file.".into(),
+                    "Server changed or ignored a range. Saved progress has been kept. Use Update link with a link to the same file.".into(),
                 )
                 .into());
             }
@@ -761,7 +848,7 @@ impl Engine {
                 && *old != new
             {
                 return Err(ProtocolError(
-                    "The remote file changed. Resume to restart safely.".into(),
+                    "The remote file changed. Saved progress has been kept. Use Update link with a link to the same file.".into(),
                 )
                 .into());
             }
@@ -953,3 +1040,13 @@ impl std::fmt::Display for ProtocolError {
     }
 }
 impl std::error::Error for ProtocolError {}
+
+fn http_error(status: u16) -> String {
+    if matches!(status, 401 | 403 | 404 | 410) {
+        format!(
+            "Server returned HTTP {status}. The link may have expired. Use Update link to continue; saved progress has been kept."
+        )
+    } else {
+        format!("Server returned HTTP {status}.")
+    }
+}

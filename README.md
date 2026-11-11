@@ -29,18 +29,18 @@ cargo build --locked --release
 python scripts/package.py
 ```
 
-On Linux x64, this produces `dist/Relay-0.2.1-Linux-x64.tar.gz`:
+On Linux x64, this produces `dist/Relay-0.3.0-Linux-x64.tar.gz`:
 
 ```sh
-tar -xzf dist/Relay-0.2.1-Linux-x64.tar.gz
-./Relay-0.2.1-Linux-x64/relay
+tar -xzf dist/Relay-0.3.0-Linux-x64.tar.gz
+./Relay-0.3.0-Linux-x64/relay
 ```
 
-On Windows x64, this produces `dist/Relay-0.2.1-Windows-x64.zip`. Extract it and run `relay.exe`. The native binary embeds both browser companions; no separate extension download is necessary. Windows builds are unsigned.
+On Windows x64, this produces `dist/Relay-0.3.0-Windows-x64.zip`. Extract it and run `relay.exe`. The native binary embeds both browser companions; no separate extension download is necessary. Windows builds are unsigned.
 
 The Linux archive includes an optional desktop entry and icon. Put the binary on your `PATH`, install `local.relay.downloads.desktop` under `~/.local/share/applications/`, and install `relay.png` as `~/.local/share/icons/hicolor/256x256/apps/relay.png` to add an application-menu entry.
 
-The [Rust desktop workflow](.github/workflows/rust.yml) runs checks for pushes and pull requests. After the Linux, Windows, and browser checks pass on `master`, it automatically publishes a GitHub Release named for the version in `Cargo.toml` (for example, `v0.2.1`). The release contains the Linux tar.gz, Windows zip, generated notes, and `SHA256SUMS`. Uploaded assets are downloaded again and checked against their local SHA-256 hashes before the draft release is published.
+The [Rust desktop workflow](.github/workflows/rust.yml) runs checks for pushes and pull requests. After the Linux, Windows, and browser checks pass on `master`, it automatically publishes a GitHub Release named for the version in `Cargo.toml` (for example, `v0.3.0`). The release contains the Linux tar.gz, Windows zip, generated notes, and `SHA256SUMS`. Uploaded assets are downloaded again and checked against their local SHA-256 hashes before the draft release is published.
 
 A published version is never overwritten. To release the next version, update `version` in `Cargo.toml`, run `cargo check` to refresh `Cargo.lock`, and commit both files to `master`. You can also manually run the workflow on `master` to retry an unpublished version. Draft retries must target the same commit. Prerelease versions such as `0.3.0-rc.1` are marked as prereleases.
 
@@ -51,6 +51,8 @@ Temporary Actions artifacts are uploaded only for release candidates. After succ
 Choose **New download**, paste a direct HTTP(S) URL, and select a **Download directory** before starting. An optional file name overrides the server's name. Select a named queue, 1–16 connections, a local schedule in `YYYY-MM-DD HH:MM` format, or **Add paused**.
 
 Use **Pause**, **Resume**, **Pause all**, or **Resume all** to control transfers. **Move up** changes queue priority; choose **Queue order** to see the saved order. A named queue runs one file at a time, while different queues can run concurrently up to the simultaneous-download setting. Search, category views, queue filters, and sorting help organize the list.
+
+For an expired or failed link, choose **Update link** on the download, paste a fresh URL for the same file, and leave **Resume after updating** checked to continue immediately (or uncheck it to stay paused). Relay stops the old connections and validates the replacement before changing the saved URL. The file name, destination, and downloaded segments are preserved. Incompatible links leave the download paused with its original URL and bytes intact. Successful updates with saved bytes create a metadata checkpoint in `<chosen directory>/.relay-recovery/<download ID>/`.
 
 Settings control the default destination, connections per file, simultaneous downloads, shared bandwidth cap, and category subfolders. A bandwidth cap of zero means unlimited. Per-download destination choices do not change the default. Completed files can be revealed in their containing folder. Removing an entry deletes partial bytes and keeps any completed file.
 
@@ -66,7 +68,7 @@ Relay stores download history, preferences, and the private browser pairing toke
 
 Back up the profile and partial directories when moving to another computer. Queues and preferences are saved in `state.json`. Relay recounts partial bytes from disk and restores interrupted transfers as paused. If a destination is unavailable, it reports an error and preserves the partial data for retry. Corrupt history stops startup instead of replacing the original file.
 
-Resume reuses bytes only when file size and a strong ETag or Last-Modified validator match. Missing or changed validators trigger a safe restart. Servers that ignore byte ranges use a single connection and restart on resume. Transient segment failures retry up to three attempts. Final assembly happens on the destination drive, flushes the staging file, and publishes without overwriting existing files. Filesystems without hard-link support use an exclusive-copy fallback. Physical disk corruption and power-loss recovery are not guaranteed.
+Resume reuses bytes only when file size and a strong ETag or Last-Modified validator match. Missing or changed validators, file sizes, or range support leave saved progress intact and report an error; use **Update link** with a verifiable source for the same file. Servers that ignore byte ranges use a single connection; interrupted partial downloads from these servers cannot be safely resumed. Transient segment failures retry up to three attempts. Final assembly happens on the destination drive, flushes the staging file, and publishes without overwriting existing files. Filesystems without hard-link support use an exclusive-copy fallback. Physical disk corruption and power-loss recovery are not guaranteed.
 
 Only one native Relay process can open a profile. A second instance reports that the profile is in use; switch to the existing window. For isolated testing, use absolute paths:
 
@@ -76,7 +78,7 @@ cargo run -- --profile /absolute/test-profile --downloads /absolute/test-downloa
 
 ## Browser integration
 
-1. Open **Settings & integration → Open extension folder**. The embedded companions are extracted under the profile's `extensions/0.2.1/` directory.
+1. Open **Settings & integration → Open extension folder**. The embedded companions are extracted under the profile's `extensions/0.3.0/` directory.
 2. **Chrome:** open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `chromium`. **Edge:** use `edge://extensions`.
 3. **Firefox:** open `about:debugging`, choose **This Firefox → Load Temporary Add-on**, and select `firefox/manifest.json`. The temporary installation lasts until Firefox restarts. Signed distribution is not included.
 4. In Relay, click **Copy pairing token**. Paste it into the companion popup and click **Connect**.

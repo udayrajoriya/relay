@@ -70,6 +70,8 @@ pub struct Job {
     pub file_path: Option<PathBuf>,
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(default)]
+    pub last_url_update_at: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub connections: usize,
 }
 impl Job {

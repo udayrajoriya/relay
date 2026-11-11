@@ -14,6 +14,7 @@ enum Message {
     Error(String),
     Folder(PathBuf, bool),
     BrowserDialogDone,
+    LinkUpdated(std::result::Result<u64, String>),
 }
 #[derive(Default)]
 struct DownloadForm {
@@ -24,6 +25,14 @@ struct DownloadForm {
     connections: usize,
     paused: bool,
     scheduled: String,
+}
+struct LinkForm {
+    id: String,
+    name: String,
+    url: String,
+    resume: bool,
+    busy: bool,
+    error: Option<String>,
 }
 pub struct Desktop {
     engine: Engine,
@@ -43,6 +52,7 @@ pub struct Desktop {
     message: Option<String>,
     show_add: bool,
     form: DownloadForm,
+    link_form: Option<LinkForm>,
     preferences: Settings,
     smoke: Option<PathBuf>,
     frames: usize,
@@ -77,6 +87,7 @@ impl Desktop {
             message: None,
             show_add: false,
             form: DownloadForm::default(),
+            link_form: None,
             preferences,
             smoke,
             frames: 0,
@@ -90,6 +101,55 @@ impl Desktop {
                 let _ = send.send(Message::Error(error.to_string()));
             }
         });
+    }
+    fn link_ui(&mut self, ctx: &egui::Context) {
+        let Some(form) = &mut self.link_form else {
+            return;
+        };
+        let mut dismiss = false;
+        let mut submit = false;
+        egui::Window::new("Update link")
+            .fade_in(false)
+            .fade_out(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false).resizable(false).default_width(520.0)
+            .show(ctx, |ui| {
+                ui.heading("Pick up where you left off.");
+                ui.label(&form.name);
+                ui.label("Replace an expired or failed link for the same file.");
+                ui.add_enabled_ui(!form.busy, |ui| {
+                    ui.label("Replacement URL");
+                    ui.add(egui::TextEdit::singleline(&mut form.url).desired_width(480.0));
+                    ui.checkbox(&mut form.resume, "Resume after updating");
+                    ui.label("Relay checks byte-range support, file size, and the server's file identifier. An incompatible replacement leaves your saved bytes intact.");
+                    if let Some(error) = &form.error {
+                        ui.colored_label(Color32::from_rgb(190, 50, 50), error);
+                    }
+                    ui.horizontal(|ui| {
+                        submit = ui.button("Update link").clicked();
+                        dismiss = ui.button("Cancel").clicked();
+                    });
+                });
+                if form.busy { ui.label("Checking replacement…"); }
+            });
+        if submit {
+            form.busy = true;
+            form.error = None;
+            let (id, url, resume) = (form.id.clone(), form.url.clone(), form.resume);
+            let engine = self.engine.clone();
+            let send = self.send.clone();
+            tokio::spawn(async move {
+                let result = engine
+                    .replace_url(&id, &url, resume)
+                    .await
+                    .map(|job| job.received)
+                    .map_err(|e| e.to_string());
+                let _ = send.send(Message::LinkUpdated(result));
+            });
+        }
+        if dismiss {
+            self.link_form = None;
+        }
     }
     fn new_download(&mut self) {
         self.form = DownloadForm {
@@ -127,6 +187,21 @@ impl Desktop {
     fn collect_events(&mut self, ctx: &egui::Context) {
         while let Ok(message) = self.messages.try_recv() {
             match message {
+                Message::LinkUpdated(result) => match result {
+                    Ok(received) => {
+                        self.link_form = None;
+                        self.message = Some(format!(
+                            "Link updated. {} of saved progress kept.",
+                            bytes(received as f64)
+                        ));
+                    }
+                    Err(error) => {
+                        if let Some(form) = &mut self.link_form {
+                            form.busy = false;
+                            form.error = Some(error);
+                        }
+                    }
+                },
                 Message::Error(error) => self.message = Some(error),
                 Message::Folder(path, true) => self.form.destination = path.display().to_string(),
                 Message::Folder(path, false) => self.preferences.download_dir = path,
@@ -375,6 +450,23 @@ impl Desktop {
                                 );
                             }
                         }
+                        if job.status != "completed"
+                            && ui
+                                .add_enabled(
+                                    self.link_form.is_none(),
+                                    egui::Button::new("Update link"),
+                                )
+                                .clicked()
+                        {
+                            self.link_form = Some(LinkForm {
+                                id: job.id.clone(),
+                                name: job.name.clone(),
+                                url: String::new(),
+                                resume: true,
+                                busy: false,
+                                error: None,
+                            });
+                        }
                         if matches!(job.status.as_str(), "paused" | "error")
                             && ui.button("Resume").clicked()
                         {
@@ -490,6 +582,20 @@ impl eframe::App for Desktop {
                 }
                 14 => ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
                     egui::UserData::new("settings".to_string()),
+                )),
+                17 => {
+                    self.view = "All downloads".into();
+                    self.link_form = Some(LinkForm {
+                        id: String::new(),
+                        name: "Interrupted download.zip".into(),
+                        url: String::new(),
+                        resume: true,
+                        busy: false,
+                        error: None,
+                    });
+                }
+                19 => ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                    egui::UserData::new("update-link".to_string()),
                 )),
                 _ => (),
             }
@@ -700,12 +806,13 @@ impl eframe::App for Desktop {
                 }
             });
         });
+        self.link_ui(ctx);
         if self.show_add {
             self.add_ui(ctx);
         }
         if let Some(path) = &self.smoke {
             self.frames += 1;
-            if self.frames >= 18 {
+            if self.frames >= 23 {
                 let _ = std::fs::write(
                     path,
                     format!(

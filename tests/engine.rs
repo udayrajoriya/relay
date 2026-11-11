@@ -279,7 +279,7 @@ async fn failed_migration_keeps_original_bytes_for_retry() {
     e.close().await.unwrap();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn changed_validator_restarts_bytes() {
+async fn changed_validator_preserves_bytes() {
     let f = Fixture::new().await;
     let e = f.engine();
     let id = e.add(f.input("/file")).unwrap();
@@ -287,11 +287,19 @@ async fn changed_validator_restarts_bytes() {
     e.action(&id, "pause").await.unwrap();
     f.version.store(1, Ordering::SeqCst);
     e.action(&id, "resume").await.unwrap();
-    integrity(&finish(&e, &id).await, &payload(1));
+    until(|| e.get(&id).unwrap().status == "error").await;
+    assert!(e.get(&id).unwrap().received > 200000);
+    assert!(
+        e.get(&id)
+            .unwrap()
+            .error
+            .unwrap()
+            .contains("Saved progress")
+    );
     e.close().await.unwrap();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-async fn missing_validator_and_no_ranges_restart_safely() {
+async fn missing_validator_and_no_ranges_preserve_bytes() {
     for route in ["/plain", "/no-validator"] {
         let f = Fixture::new().await;
         let e = f.engine();
@@ -299,7 +307,8 @@ async fn missing_validator_and_no_ranges_restart_safely() {
         until(|| e.get(&id).unwrap().received > 100000).await;
         e.action(&id, "pause").await.unwrap();
         e.action(&id, "resume").await.unwrap();
-        integrity(&finish(&e, &id).await, &payload(0));
+        until(|| e.get(&id).unwrap().status == "error").await;
+        assert!(e.get(&id).unwrap().received > 100000);
         e.close().await.unwrap();
     }
 }
@@ -554,4 +563,140 @@ async fn closed_engine_cannot_overwrite_a_reopened_profile() {
         serde_json::from_slice(&fs::read(f.root.path().join("data/state.json")).unwrap()).unwrap();
     assert_eq!(saved.jobs[0].id, id);
     second.close().await.unwrap();
+}
+
+fn saved_segments(j: &Job) -> Vec<(String, Vec<u8>)> {
+    let dir = j.destination.join(".relay-parts").join(&j.id);
+    let mut files: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn replacement_preserves_progress_and_survives_restart() {
+    let f = Fixture::new().await;
+    let e = f.engine();
+    let id = e.add(f.input("/file")).unwrap();
+    until(|| e.get(&id).unwrap().received > 200000).await;
+    e.action(&id, "pause").await.unwrap();
+    let old = e.get(&id).unwrap();
+    let saved = saved_segments(&old);
+    let updated = e
+        .replace_url(&id, &format!("{}/fresh", f.base), false)
+        .await
+        .unwrap();
+    assert_eq!(updated.received, old.received);
+    assert_eq!(updated.name, old.name);
+    assert_eq!(updated.destination, old.destination);
+    assert_eq!(saved_segments(&updated), saved);
+    assert_eq!(updated.status, "paused");
+    assert!(updated.last_url_update_at.is_some());
+    let checkpoint = fs::read_dir(old.destination.join(".relay-recovery").join(&id))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let checkpoint: Job = serde_json::from_slice(&fs::read(checkpoint).unwrap()).unwrap();
+    assert_eq!(checkpoint.url, old.url);
+    e.close().await.unwrap();
+    let e = f.engine();
+    assert_eq!(e.get(&id).unwrap().url, updated.url);
+    assert_eq!(e.get(&id).unwrap().received, old.received);
+    f.requests.lock().unwrap().clear();
+    e.action(&id, "resume").await.unwrap();
+    integrity(&finish(&e, &id).await, &payload(0));
+    let requests = f.requests.lock().unwrap().clone();
+    for part in &old.parts {
+        if part.done > 0 && part.length().unwrap() > part.done {
+            assert!(
+                requests
+                    .iter()
+                    .any(|r| r.route == "/fresh"
+                        && r.start == Some((part.start + part.done) as usize))
+            );
+        }
+    }
+    assert!(e.replace_url(&id, &old.url, true).await.is_err());
+    e.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn incompatible_replacements_keep_original_bytes_and_metadata() {
+    let f = Fixture::new().await;
+    let e = f.engine();
+    let id = e.add(f.input("/file")).unwrap();
+    until(|| e.get(&id).unwrap().received > 200000).await;
+    e.action(&id, "pause").await.unwrap();
+    let old = e.get(&id).unwrap();
+    let saved = saved_segments(&old);
+    for route in [
+        "/error",
+        "/plain",
+        "/small",
+        "/unknown",
+        "/no-validator",
+        "/unsafe-redirect",
+    ] {
+        assert!(
+            e.replace_url(&id, &format!("{}{route}", f.base), true)
+                .await
+                .is_err()
+        );
+        let current = e.get(&id).unwrap();
+        assert_eq!(current.url, old.url);
+        assert_eq!(current.received, old.received);
+        assert_eq!(current.name, old.name);
+        assert_eq!(current.destination, old.destination);
+        assert_eq!(current.status, "paused");
+        assert_eq!(saved_segments(&current), saved);
+    }
+    f.version.store(1, Ordering::SeqCst);
+    assert!(
+        e.replace_url(&id, &format!("{}/fresh", f.base), true)
+            .await
+            .is_err()
+    );
+    assert!(e.replace_url(&id, "file:///invalid", true).await.is_err());
+    assert_eq!(saved_segments(&e.get(&id).unwrap()), saved);
+    f.version.store(0, Ordering::SeqCst);
+    e.replace_url(&id, &format!("{}/fresh", f.base), true)
+        .await
+        .unwrap();
+    integrity(&finish(&e, &id).await, &payload(0));
+    e.close().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn replace_active_and_empty_downloads() {
+    let f = Fixture::new().await;
+    let e = f.engine();
+    let id = e.add(f.input("/file")).unwrap();
+    until(|| e.get(&id).unwrap().received > 200000).await;
+    e.replace_url(&id, &format!("{}/fresh", f.base), true)
+        .await
+        .unwrap();
+    integrity(&finish(&e, &id).await, &payload(0));
+    let id = e.add(f.input("/error")).unwrap();
+    until(|| e.get(&id).unwrap().status == "error").await;
+    e.replace_url(&id, &format!("{}/plain", f.base), true)
+        .await
+        .unwrap();
+    integrity(&finish(&e, &id).await, &payload(0));
+    assert_eq!(e.snapshot().jobs.len(), 2);
+    e.close().await.unwrap();
+    assert!(
+        e.replace_url(&id, &format!("{}/file", f.base), true)
+            .await
+            .is_err()
+    );
 }
